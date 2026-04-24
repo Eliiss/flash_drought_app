@@ -1,0 +1,3 @@
+pip install sentinelhub pandas matplotlib
+pip install python-dotenv
+pip3 install cdsapi
