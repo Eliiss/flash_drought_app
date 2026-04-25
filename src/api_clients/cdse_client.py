@@ -1,100 +1,113 @@
 import os
-from dotenv import load_dotenv
 import pandas as pd
-from sentinelhub import (
-    SHConfig,
-    SentinelHubStatistical,
-    DataCollection,
-    BBox,
-    CRS,
-    geometry
-)
+import numpy as np
+import time
+from dotenv import load_dotenv
+from sentinelhub import SHConfig, SentinelHubStatistical, DataCollection, BBox, CRS
 
+# --- INICIO DEL ARREGLO ---
+# Buscamos la ruta absoluta de tu archivo .env que está 2 carpetas más atrás
+ruta_actual = os.path.dirname(os.path.abspath(__file__))
+ruta_env = os.path.join(ruta_actual, "../../.env")
+load_dotenv(dotenv_path=ruta_env)
 
-# Esto busca tu archivo .env y carga las variables en memoria
-load_dotenv() 
-
-# Ahora ya puedes llamarlas así:
-mi_id = os.getenv("CDSE_CLIENT_ID")
-mi_secreto = os.getenv("CDSE_CLIENT_SECRET")
-
-# Y se las pasas a la configuración de Copernicus:
 config = SHConfig()
-config.sh_client_id = mi_id
-config.sh_client_secret = mi_secreto
+config.sh_client_id = os.getenv("CDSE_CLIENT_ID")
+config.sh_client_secret = os.getenv("CDSE_CLIENT_SECRET")
 config.sh_base_url = 'https://sh.dataspace.copernicus.eu'
 
+config.sh_token_url = 'https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token'
 
-# 2. DEFINIR LA PARCELA Y EL TIEMPO
-# Coordenadas de ejemplo (Bounding Box) de un campo agrícola en España
-# Formato: [min_lon, min_lat, max_lon, max_lat]
-bbox_campo = BBox(bbox=[-3.85, 39.85, -3.84, 39.86], crs=CRS.WGS84)
-intervalo_tiempo = ('2023-04-01', '2023-05-30') # Época de sequía
 
-# 3. EL EVALSCRIPT (El "cerebro" que procesa en la nube)
-# Calcula el NDMI: (B08 - B11) / (B08 + B11) 
-# y filtra los píxeles que son nubes para que no ensucien los datos.
+# Zona
+zonas = {    'Valdeorras_Incendio':[-7.16302, 42.36480] }
+# ... (Tu configuración y tu .env de arriba se quedan exactamente igual) ...
+
+# 1. ¡EL ARREGLO! Definimos que Sentinel-1 use la URL de Copernicus CDSE
+S1_CDSE = DataCollection.SENTINEL1_IW.define_from("s1_cdse", service_url=config.sh_base_url)
+
+# 2. EVALSCRIPT PARA SENTINEL-1
 evalscript = """
 //VERSION=3
 function setup() {
     return {
         input: [{
-            bands:["B08", "B11", "SCL"],
-            units: "DN"
+            bands: ["VV", "VH", "dataMask"]
         }],
-        output:[
-            { id: "NDMI", bands: 1, sampleType: "FLOAT32" },
+        output: [
+            { id: "VV", bands: 1, sampleType: "FLOAT32" },
+            { id: "VH", bands: 1, sampleType: "FLOAT32" },
             { id: "dataMask", bands: 1, sampleType: "UINT8" }
         ]
     };
 }
 
-function evaluatePixel(samples) {
-    let ndmi = (samples.B08 - samples.B11) / (samples.B08 + samples.B11);
-    
-    // Filtrar nubes usando la capa SCL (Scene Classification Layer)
-    // 4=Vegetación, 5=Suelo desnudo, 6=Agua. Ignoramos nubes (8,9,10)
-    let validPixel = [4, 5, 6].includes(samples.SCL) ? 1 : 0;
-    
+function evaluatePixel(sample) {
     return {
-        NDMI: [ndmi],
-        dataMask: [validPixel]
+        VV: [sample.VV],
+        VH: [sample.VH],
+        dataMask: [sample.dataMask]
     };
 }
 """
 
-# 4. CREAR LA PETICIÓN ESTADÍSTICA
-request = SentinelHubStatistical(
-    aggregation=SentinelHubStatistical.aggregation(
-        evalscript=evalscript,
-        time_interval=intervalo_tiempo,
-        aggregation_interval='P1D', # Agrupar por 1 Día
-        resolution=(10, 10)         # Resolución Sentinel-2 (10x10 metros)
-    ),
-    input_data=[
-        SentinelHubStatistical.input_data(
-            DataCollection.SENTINEL2_L2A # Producto ya corregido atmosféricamente
+datos_satelite =[]
+
+for nombre, (lon, lat) in zonas.items():
+    print(f"Descargando Radar Sentinel-1 (VV/VH) para {nombre}...")
+    delta = 0.045
+    bbox_coords =[lon - delta, lat - delta, lon + delta, lat + delta]
+    bbox = BBox(bbox=bbox_coords, crs=CRS.WGS84)
+    
+    try:
+        request = SentinelHubStatistical(
+            aggregation=SentinelHubStatistical.aggregation(
+                evalscript=evalscript, 
+                time_interval=('2022-01-01', '2023-12-31'),
+                aggregation_interval='P7D', # Semanal
+                resolution=(0.0002, 0.0002) 
+
+            ),
+            # 3. ¡USAMOS LA COLECCIÓN QUE HEMOS REDIRIGIDO!
+            input_data=[SentinelHubStatistical.input_data(S1_CDSE)],
+            bbox=bbox, 
+            config=config
         )
-    ],
-    bbox=bbox_campo,
-    config=config
-)
+        
+        response = request.get_data()[0]
+        
+        for dato in response['data']:
+            stats_vv = dato['outputs']['VV']['bands']['B0']['stats']
+            stats_vh = dato['outputs']['VH']['bands']['B0']['stats']
+            
+            if stats_vv['sampleCount'] > 0:
+                datos_satelite.append({
+                    'Zona': nombre,
+                    'Fecha': dato['interval']['from'][:10],
+                    'VV_linear': stats_vv['mean'],
+                    'VH_linear': stats_vh['mean'],
+                    'Píxeles_Válidos': stats_vv['sampleCount']
+                })
+        
+        time.sleep(1) 
+        print(f" {nombre} completado.")
+        
+    except Exception as e:
+        print(f"Error en zona {nombre}: {e}")
+        continue
 
-# 5. EJECUTAR Y LIMPIAR DATOS
-print("Descargando estadísticas de NDMI...")
-response = request.get_data()[0]
-
-# Convertir el feo JSON a un precioso DataFrame de Pandas
-datos = []
-for dato_diario in response['data']:
-    fecha = dato_diario['interval']['from']
-    # Solo guardar si hay datos válidos ese día (que no estuviera todo nublado)
-    if dato_diario['outputs']['NDMI']['bands']['B0']['stats']['sampleCount'] > 0:
-        media_ndmi = dato_diario['outputs']['NDMI']['bands']['B0']['stats']['mean']
-        datos.append({'Fecha': fecha, 'NDMI_Mean': media_ndmi})
-
-df_ndmi = pd.DataFrame(datos)
-df_ndmi['Fecha'] = pd.to_datetime(df_ndmi['Fecha'])
-
-print("¡Datos listos!")
-print(df_ndmi.head())
+# 4. Procesamiento final a Decibelios
+if datos_satelite:
+    df_sat = pd.DataFrame(datos_satelite)
+    
+    df_sat['VV_dB'] = 10 * np.log10(df_sat['VV_linear'].replace(0, np.nan))
+    df_sat['VH_dB'] = 10 * np.log10(df_sat['VH_linear'].replace(0, np.nan))
+    df_sat['VH_VV_Ratio'] = df_sat['VH_dB'] - df_sat['VV_dB']
+    
+    # Creamos la carpeta si no existe
+    df_sat.to_csv('C:\\Users\\lucia\\Documents\\GitHub\\flash_drought_app\\data\\raw\\features_sentinel1.csv', index=False)
+    
+    print(f"\n¡Misión cumplida! {len(df_sat)} semanas de datos de radar guardados en features_sentinel1.csv")
+    print(df_sat.head())
+else:
+    print("No se recuperaron datos.")
