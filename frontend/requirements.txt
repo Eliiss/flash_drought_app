@@ -1,4 +1,5 @@
 streamlit
+geopandas
+folium
 leafmap
-osmnx
 streamlit-folium

@@ -103,7 +103,6 @@ PREDICTION_DATA = {
     }
 }
 
-
 # Fake historical records for the areas defined in your app
 HISTORICAL_DATA = {
     "Pontevedra": [
