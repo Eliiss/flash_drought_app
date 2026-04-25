@@ -1,3 +1,5 @@
 pip install sentinelhub pandas matplotlib
 pip install python-dotenv
 pip3 install cdsapi
+pip install numpy ipyleaflet ipywidgets
+pip install xarray netCDF4 

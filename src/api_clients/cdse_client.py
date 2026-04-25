@@ -1,100 +1,88 @@
 import os
-from dotenv import load_dotenv
 import pandas as pd
-from sentinelhub import (
-    SHConfig,
-    SentinelHubStatistical,
-    DataCollection,
-    BBox,
-    CRS,
-    geometry
-)
+import time
+from dotenv import load_dotenv
+from sentinelhub import SHConfig, SentinelHubStatistical, DataCollection, BBox, CRS
 
-
-# Esto busca tu archivo .env y carga las variables en memoria
-load_dotenv() 
-
-# Ahora ya puedes llamarlas así:
-mi_id = os.getenv("CDSE_CLIENT_ID")
-mi_secreto = os.getenv("CDSE_CLIENT_SECRET")
-
-# Y se las pasas a la configuración de Copernicus:
+load_dotenv()
 config = SHConfig()
-config.sh_client_id = mi_id
-config.sh_client_secret = mi_secreto
+config.sh_client_id = os.getenv("CDSE_CLIENT_ID")
+config.sh_client_secret = os.getenv("CDSE_CLIENT_SECRET")
 config.sh_base_url = 'https://sh.dataspace.copernicus.eu'
 
-
-# 2. DEFINIR LA PARCELA Y EL TIEMPO
-# Coordenadas de ejemplo (Bounding Box) de un campo agrícola en España
-# Formato: [min_lon, min_lat, max_lon, max_lat]
-bbox_campo = BBox(bbox=[-3.85, 39.85, -3.84, 39.86], crs=CRS.WGS84)
-intervalo_tiempo = ('2023-04-01', '2023-05-30') # Época de sequía
-
-# 3. EL EVALSCRIPT (El "cerebro" que procesa en la nube)
-# Calcula el NDMI: (B08 - B11) / (B08 + B11) 
-# y filtra los píxeles que son nubes para que no ensucien los datos.
-evalscript = """
-//VERSION=3
-function setup() {
-    return {
-        input: [{
-            bands:["B08", "B11", "SCL"],
-            units: "DN"
-        }],
-        output:[
-            { id: "NDMI", bands: 1, sampleType: "FLOAT32" },
-            { id: "dataMask", bands: 1, sampleType: "UINT8" }
-        ]
-    };
+zonas = {
+    'Sevilla': [-5.08, 37.53], 'Huesca':[0.32, 41.51], 'Barcelona': [2.25, 41.93],
+    'Asturias': [-5.43, 43.48], 'Cantabria':[-4.05, 43.35]
 }
 
-function evaluatePixel(samples) {
-    let ndmi = (samples.B08 - samples.B11) / (samples.B08 + samples.B11);
-    
-    // Filtrar nubes usando la capa SCL (Scene Classification Layer)
-    // 4=Vegetación, 5=Suelo desnudo, 6=Agua. Ignoramos nubes (8,9,10)
-    let validPixel = [4, 5, 6].includes(samples.SCL) ? 1 : 0;
-    
-    return {
-        NDMI: [ndmi],
-        dataMask: [validPixel]
+# EVALSCRIPT OPTIMIZADO: Pedimos NDVI y NDMI a la vez
+evalscript_indices = """
+//VERSION=3
+function setup() {
+    return { 
+        input: [{ bands:["B04", "B08", "B11", "SCL"], units: "DN" }], 
+        output:[
+            { id: "NDMI", bands: 1, sampleType: "FLOAT32" },
+            { id: "NDVI", bands: 1, sampleType: "FLOAT32" }
+        ] 
     };
+}
+function evaluatePixel(samples) {
+    // Solo procesamos píxeles de Vegetación (4) y Suelo (5). Agua (6) fuera para no falsear sequía.
+    if (![4, 5].includes(samples.SCL)) return { NDMI: [NaN], NDVI: [NaN] }; 
+    
+    let ndmi = (samples.B08 - samples.B11) / (samples.B08 + samples.B11);
+    let ndvi = (samples.B08 - samples.B04) / (samples.B08 + samples.B04);
+    
+    return { NDMI: [ndmi], NDVI: [ndvi] };
 }
 """
 
-# 4. CREAR LA PETICIÓN ESTADÍSTICA
-request = SentinelHubStatistical(
-    aggregation=SentinelHubStatistical.aggregation(
-        evalscript=evalscript,
-        time_interval=intervalo_tiempo,
-        aggregation_interval='P1D', # Agrupar por 1 Día
-        resolution=(10, 10)         # Resolución Sentinel-2 (10x10 metros)
-    ),
-    input_data=[
-        SentinelHubStatistical.input_data(
-            DataCollection.SENTINEL2_L2A # Producto ya corregido atmosféricamente
+datos_satelite = []
+
+for nombre, (lon, lat) in zonas.items():
+    print(f"Descargando Sentinel-2 para {nombre}...")
+    bbox = BBox(bbox=[lon-0.01, lat-0.01, lon+0.01, lat+0.01], crs=CRS.WGS84)
+    
+    try:
+        request = SentinelHubStatistical(
+            aggregation=SentinelHubStatistical.aggregation(
+                evalscript=evalscript_indices, 
+                time_interval=('2022-01-01', '2023-12-31'),
+                aggregation_interval='P7D', 
+                resolution=(20, 20) # Resolución óptima para B11
+            ),
+            input_data=[SentinelHubStatistical.input_data(DataCollection.SENTINEL2_L2A)],
+            bbox=bbox, config=config
         )
-    ],
-    bbox=bbox_campo,
-    config=config
-)
+        
+        response = request.get_data()[0]
+        
+        for dato in response['data']:
+            # Verificamos que existan datos válidos en AMBAS métricas
+            stats_ndmi = dato['outputs']['NDMI']['bands']['B0']['stats']
+            stats_ndvi = dato['outputs']['NDVI']['bands']['B0']['stats']
+            
+            if stats_ndmi['sampleCount'] > 0:
+                datos_satelite.append({
+                    'Zona': nombre,
+                    'Fecha': dato['interval']['from'][:10],
+                    'NDMI': stats_ndmi['mean'],
+                    'NDVI': stats_ndvi['mean'],
+                    'Píxeles_Válidos': stats_ndmi['sampleCount']
+                })
+        
+        # Pausa para no saturar la API
+        time.sleep(1) 
+        
+    except Exception as e:
+        print(f"Error en zona {nombre}: {e}")
+        continue
 
-# 5. EJECUTAR Y LIMPIAR DATOS
-print("Descargando estadísticas de NDMI...")
-response = request.get_data()[0]
-
-# Convertir el feo JSON a un precioso DataFrame de Pandas
-datos = []
-for dato_diario in response['data']:
-    fecha = dato_diario['interval']['from']
-    # Solo guardar si hay datos válidos ese día (que no estuviera todo nublado)
-    if dato_diario['outputs']['NDMI']['bands']['B0']['stats']['sampleCount'] > 0:
-        media_ndmi = dato_diario['outputs']['NDMI']['bands']['B0']['stats']['mean']
-        datos.append({'Fecha': fecha, 'NDMI_Mean': media_ndmi})
-
-df_ndmi = pd.DataFrame(datos)
-df_ndmi['Fecha'] = pd.to_datetime(df_ndmi['Fecha'])
-
-print("¡Datos listos!")
-print(df_ndmi.head())
+# Guardado seguro
+if datos_satelite:
+    df_sat = pd.DataFrame(datos_satelite)
+    df_sat.to_csv('../data/raw/features_sentinel.csv', index=False)
+    print(f"¡Éxito! {len(df_sat)} registros guardados en features_sentinel.csv")
+else:
+    print("No se recuperaron datos.")
