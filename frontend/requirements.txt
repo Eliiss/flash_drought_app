@@ -1,0 +1,5 @@
+streamlit
+geopandas
+folium
+leafmap
+streamlit-folium

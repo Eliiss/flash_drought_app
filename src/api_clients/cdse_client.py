@@ -2,7 +2,18 @@ import os
 import pandas as pd
 import numpy as np
 import time
+import pandas as pd
+import numpy as np
+import time
 from dotenv import load_dotenv
+from sentinelhub import SHConfig, SentinelHubStatistical, DataCollection, BBox, CRS
+
+# --- INICIO DEL ARREGLO ---
+# Buscamos la ruta absoluta de tu archivo .env que está 2 carpetas más atrás
+ruta_actual = os.path.dirname(os.path.abspath(__file__))
+ruta_env = os.path.join(ruta_actual, "../../.env")
+load_dotenv(dotenv_path=ruta_env)
+
 from sentinelhub import SHConfig, SentinelHubStatistical, DataCollection, BBox, CRS
 
 # --- INICIO DEL ARREGLO ---
@@ -14,8 +25,21 @@ load_dotenv(dotenv_path=ruta_env)
 config = SHConfig()
 config.sh_client_id = os.getenv("CDSE_CLIENT_ID")
 config.sh_client_secret = os.getenv("CDSE_CLIENT_SECRET")
+config.sh_client_id = os.getenv("CDSE_CLIENT_ID")
+config.sh_client_secret = os.getenv("CDSE_CLIENT_SECRET")
 config.sh_base_url = 'https://sh.dataspace.copernicus.eu'
 
+config.sh_token_url = 'https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token'
+
+
+# Zona
+zonas = {    'Valdeorras_Incendio':[-7.16302, 42.36480] }
+# ... (Tu configuración y tu .env de arriba se quedan exactamente igual) ...
+
+# 1. ¡EL ARREGLO! Definimos que Sentinel-1 use la URL de Copernicus CDSE
+S1_CDSE = DataCollection.SENTINEL1_IW.define_from("s1_cdse", service_url=config.sh_base_url)
+
+# 2. EVALSCRIPT PARA SENTINEL-1
 config.sh_token_url = 'https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token'
 
 
@@ -33,7 +57,11 @@ function setup() {
     return {
         input: [{
             bands: ["VV", "VH", "dataMask"]
+            bands: ["VV", "VH", "dataMask"]
         }],
+        output: [
+            { id: "VV", bands: 1, sampleType: "FLOAT32" },
+            { id: "VH", bands: 1, sampleType: "FLOAT32" },
         output: [
             { id: "VV", bands: 1, sampleType: "FLOAT32" },
             { id: "VH", bands: 1, sampleType: "FLOAT32" },
@@ -43,7 +71,11 @@ function setup() {
 }
 
 function evaluatePixel(sample) {
+function evaluatePixel(sample) {
     return {
+        VV: [sample.VV],
+        VH: [sample.VH],
+        dataMask: [sample.dataMask]
         VV: [sample.VV],
         VH: [sample.VH],
         dataMask: [sample.dataMask]
