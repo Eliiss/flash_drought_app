@@ -195,10 +195,10 @@ with st.sidebar:
             min_value=date.today(),
         )
         st.markdown("### 📡 Satellite Data (Nowcasting)")
-        vh_vv = st.slider("Current Moisture (VH/VV dB)", -8.0, -4.0, -6.5, 0.1)
-        anomalia = st.slider("Radar Anomaly", -1.0, 1.0, -0.2, 0.05)
-        velocidad = st.slider("Drying Velocity", -0.5, 0.5, -0.1, 0.05)
-        spei_prev = st.slider("Previous SPEI (Meteorology)", -3.0, 3.0, -1.0, 0.1)
+        vh_vv = st.slider("Current Moisture (VH/VV dB)", -8.0, -4.0, -6.11, 0.01)
+        anomalia = st.slider("Radar Anomaly", -1.0, 1.0, -0.11, 0.01)
+        velocidad = st.slider("Drying Velocity", -0.5, 0.5, 0.04, 0.01)
+        spei_prev = st.slider("Previous SPEI (Meteorology)", -3.0, 3.0, 1.50, 0.1)
     else:
         next_prediction_date = None
 
