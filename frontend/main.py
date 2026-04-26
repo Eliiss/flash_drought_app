@@ -3,6 +3,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
+import joblib
+import pandas as pd
 
 import folium
 import geopandas as gpd
@@ -11,6 +13,13 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 st.set_page_config(page_title="Demeter's Oracle", layout="wide")
+
+@st.cache_resource
+def load_ai_model():
+    # Aseguraos de que la ruta coincide con donde guardaste el .pkl
+    return joblib.load('C:\\Users\\Hulia\\OneDrive\\Documents\\flash_drought_app\\src\\model\\flash_drought_rf_model.pkl')
+
+modelo_ia = load_ai_model()
 
 BASE_DIR = Path(__file__).resolve().parent
 ICON_PATH = BASE_DIR / "img" / "icon.png"
@@ -185,6 +194,11 @@ with st.sidebar:
             value=date.today() + timedelta(days=7),
             min_value=date.today(),
         )
+        st.markdown("### 📡 Satellite Data (Nowcasting)")
+        vh_vv = st.slider("Current Moisture (VH/VV dB)", -8.0, -4.0, -6.5, 0.1)
+        anomalia = st.slider("Radar Anomaly", -1.0, 1.0, -0.2, 0.05)
+        velocidad = st.slider("Drying Velocity", -0.5, 0.5, -0.1, 0.05)
+        spei_prev = st.slider("Previous SPEI (Meteorology)", -3.0, 3.0, -1.0, 0.1)
     else:
         next_prediction_date = None
 
@@ -319,7 +333,14 @@ else:
 
     if page_view == "Prediction":
         right_area = selected_area
-        right_score = float(filtered_area_items[right_area]["score"])
+        
+        # --- Calculo de la probabilidad con la ia ---
+        datos_entrada = pd.DataFrame([[
+            vh_vv, anomalia, velocidad, spei_prev
+        ]], columns=['VH_VV_Ratio_Smooth', 'Anomalia_Radar', 'Velocidad_Secado_Radar', 'SPEI_hace_1_mes'])
+        
+        probabilidad_ia = modelo_ia.predict_proba(datos_entrada)[0][1]
+        right_score = float(probabilidad_ia)
 
     if page_view == "Monitoring":
         reference_date = date.today()
@@ -334,11 +355,22 @@ else:
         
         if page_view == "Monitoring":
             st.metric("Location", selected_monitoring_province if selected_monitoring_province else "No province")
-            st.metric("Status", "Flash Drought")
+            st.metric("Status", "Normal / Safe")
         else:
             st.metric("Location (Prediction)", right_area)
-            st.metric("Flash Drought Probability", f"{right_score * 100:.1f}%")
+            
+            # MOSTRAR PORCENTAJE CON COLORES SEGÚN EL RIESGO
+            porcentaje_final = right_score * 100
+            st.markdown(f"### Flash Drought Probability: {porcentaje_final:.1f}%")
             st.progress(right_score)
+            
+            if porcentaje_final < 30:
+                st.success("🟢 **LOW RISK**: Ecosystem moisture is stable.")
+            elif porcentaje_final < 70:
+                st.warning("🟡 **WARNING**: Rapid moisture loss detected.")
+            else:
+                st.error("🔴 **TINDERBOX ALERT**: Extreme Flash Drought. High Megafire risk!")
+
         
         st.metric(reference_label, reference_date.strftime("%Y-%m-%d"))
 
@@ -351,7 +383,7 @@ else:
         if history:
             for record in history:
                 # Using an expander or a simple container for each event
-                st.markdown(f"**Flash Drought** - {record['date']} ")
+                st.markdown(f"**Flash Drought** - {record['date']}  ({record['severity']})")
         else:
             st.info("No historical flash droughts recorded for this area.")
         # -----------------------------------

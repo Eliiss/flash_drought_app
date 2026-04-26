@@ -1,5 +1,5 @@
-streamlit
-geopandas
-folium
-leafmap
-streamlit-folium
+pip install streamlit
+pip install geopandas
+pip install folium
+pip install leafmap
+pip install streamlit-folium
