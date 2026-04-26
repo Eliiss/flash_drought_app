@@ -80,7 +80,7 @@ for nombre, (lon, lat) in zonas.items():
             stats_vv = dato['outputs']['VV']['bands']['B0']['stats']
             stats_vh = dato['outputs']['VH']['bands']['B0']['stats']
             
-            if stats_vv['sampleCounter'] > 0:
+            if stats_vv['sampleCount'] > 0:
                 datos_satelite.append({
                     'Zona': nombre,
                     'Fecha': dato['interval']['from'][:10],

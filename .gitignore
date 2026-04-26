@@ -1,2 +1,9 @@
 .env
 *.nc
+*.pkl
+
+data/raw/
+data/processed/
+src/model
+
+git filter-branch --force --index-filter "git rm --cached --ignore-unmatch *.nc" --prune-empty --tag-name-filter cat -- --all
